@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Platform>x64</Platform>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>GISChat</RootNamespace>
+    <AssemblyName>GISChat</AssemblyName>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Disable Esri's CodeTaskFactory-based packaging (needs VS MSBuild) -->
+    <ProBuildAddinX>false</ProBuildAddinX>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Esri.ArcGISPro.Extensions30" Version="3.6.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Images\*.png" />
+  </ItemGroup>
+
+  <!-- Copy Config.daml to output for manual packaging -->
+  <ItemGroup>
+    <None Include="Config.daml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

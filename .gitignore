@@ -1,0 +1,41 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.cache
+*.vspscc
+*.vssscc
+
+# NuGet
+*.nupkg
+packages/
+
+# ArcGIS Pro add-in build artifact
+*.esriAddinX
+
+# Installer build artifacts
+installer/dist/
+installer/build/
+*.spec
+
+# Settings (contains API keys)
+settings.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS junk
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+*~

@@ -1,0 +1,75 @@
+<ArcGIS defaultAssembly="GISChat.dll"
+        defaultNamespace="GISChat"
+        xmlns="http://schemas.esri.com/DADF/Registry"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://schemas.esri.com/DADF/Registry file:///C:/Program%20Files/ArcGIS/Pro/bin/ArcGIS.Desktop.Framework.xsd">
+
+  <AddInInfo id="{B7E8F9A0-1234-5678-9ABC-DEF012345678}"
+             version="1.0"
+             desktopVersion="3.6">
+    <Name>GIS Chat</Name>
+    <Description>AI-powered chat assistant for ArcGIS Pro that can execute GIS tasks via natural language.</Description>
+    <Image>Images\chat32.png</Image>
+    <Author>Zsolt Zoltán Fehér</Author>
+    <Company>Zsolt Zoltán Fehér - GIS Expert</Company>
+    <Date>2026-03-06</Date>
+    <Subject>Framework</Subject>
+  </AddInInfo>
+
+  <modules>
+    <insertModule id="GISChat_Module"
+                  className="Module1"
+                  autoLoad="false"
+                  caption="GIS Chat Module">
+
+      <tabs>
+        <tab id="GISChat_Tab" caption="GIS Chat" keytip="GC">
+          <group refID="GISChat_Group" />
+        </tab>
+      </tabs>
+
+      <groups>
+        <group id="GISChat_Group" caption="AI Assistant" keytip="GA">
+          <button refID="GISChat_OpenChat" size="large" />
+          <button refID="GISChat_Settings" size="small" />
+        </group>
+      </groups>
+
+      <controls>
+        <button id="GISChat_OpenChat"
+                caption="GIS Chat"
+                className="OpenChatButton"
+                loadOnClick="true"
+                keytip="GO"
+                largeImage="Images\chat32.png"
+                smallImage="Images\chat16.png">
+          <tooltip heading="GIS Chat">
+            Open the AI chat assistant panel.
+            <disabledText>Requires an active map view.</disabledText>
+          </tooltip>
+        </button>
+        <button id="GISChat_Settings"
+                caption="Settings"
+                className="OpenSettingsButton"
+                loadOnClick="true"
+                keytip="GS"
+                smallImage="Images\settings16.png">
+          <tooltip heading="Settings">Configure API key and preferences.</tooltip>
+        </button>
+      </controls>
+
+      <dockPanes>
+        <dockPane id="GISChat_ChatDockPane"
+                  caption="GIS Chat"
+                  className="Views.ChatDockPaneViewModel"
+                  dock="right"
+                  dockWith="esri_core_projectDockPane"
+                  hasHelp="false">
+          <content className="Views.ChatDockPane" />
+        </dockPane>
+      </dockPanes>
+
+    </insertModule>
+  </modules>
+
+</ArcGIS>
