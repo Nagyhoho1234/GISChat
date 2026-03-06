@@ -61,7 +61,7 @@ QUICK_START_CONTENT = """\
 files_to_pack = []
 
 # Installer exe
-installer_exe = os.path.join(INSTALLER_DIR, 'GISChatSetup.exe')
+installer_exe = os.path.join(INSTALLER_DIR, 'GISChat_Setup.exe')
 if os.path.exists(installer_exe):
     files_to_pack.append((installer_exe, 'GISChat_Setup.exe'))
 else:
