@@ -21,14 +21,18 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore GISChat.sln
 
+      # Esri's post-build targets use CodeTaskFactory which requires VS MSBuild,
+      # unavailable on GitHub Actions. The DLL compiles fine before that step fails.
       - name: Build
-        # Esri's post-build targets use CodeTaskFactory which requires VS MSBuild.
-        # The DLL compiles fine with dotnet CLI; we continue past the post-build error.
+        id: build
+        continue-on-error: true
+        run: dotnet build GISChat.sln -c Release -p:Platform=x64 --no-restore
+
+      - name: Verify compilation
         run: |
-          dotnet build GISChat.sln -c Release -p:Platform=x64 --no-restore 2>&1 | Tee-Object -Variable buildOutput
-          # Check if the DLL was actually produced (compilation succeeds before post-build fails)
           if (Test-Path "GISChat\bin\x64\Release\net8.0-windows10.0.19041.0\GISChat.dll") {
-            Write-Host "`nBuild successful: GISChat.dll produced"
+            $size = (Get-Item "GISChat\bin\x64\Release\net8.0-windows10.0.19041.0\GISChat.dll").Length
+            Write-Host "Build successful: GISChat.dll ($size bytes)"
           } else {
             Write-Error "Compilation failed: GISChat.dll not found"
             exit 1
