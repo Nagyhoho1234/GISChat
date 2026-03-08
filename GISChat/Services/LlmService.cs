@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -13,7 +14,7 @@ public class LlmService
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(3) };
 
-    private const string SystemPrompt = """
+    private const string BaseSystemPrompt = """
         You are a GIS assistant embedded in ArcGIS Pro. You help users perform geospatial tasks
         using natural language. You have access to the current map state (layers, extent, spatial reference).
 
@@ -30,6 +31,12 @@ public class LlmService
         - Print results/counts so the user gets feedback
         - Handle errors with try/except and print useful messages
         - Always end with a print() statement summarizing what was done
+        - IMPORTANT: Always work within the current ArcGIS Pro project. Never launch a new ArcGIS Pro instance
+          or create a new project. Use aprx.activeMap or create new maps within the current project.
+        - CRITICAL: In ArcGIS Pro, sys.executable points to ArcGISPro.exe, NOT python.exe.
+          NEVER use subprocess.run([sys.executable, ...]) or subprocess.Popen with sys.executable — it launches
+          a new ArcGIS Pro instance. If you need to pip install a package, use in-process pip:
+          from pip._internal.cli.main import main as _pip; _pip(['install', 'package_name'])
 
         If the user asks a question that doesn't require code execution, just answer with text.
         If you're unsure which layer the user means, ask for clarification.
@@ -45,6 +52,35 @@ public class LlmService
         Only report failure to the user after you have exhausted reasonable alternatives (at least 2-3 attempts).
         """;
 
+    private static string BuildSystemPrompt()
+    {
+        var sb = new StringBuilder(BaseSystemPrompt);
+        var geeProject = Models.AddinSettings.Instance.GeeProject;
+        if (!string.IsNullOrWhiteSpace(geeProject))
+        {
+            sb.AppendLine();
+            sb.AppendLine($"""
+                Google Earth Engine (GEE) Integration:
+                - The user has GEE configured with project: '{geeProject}'
+                - To use GEE in code:
+                  1. import ee
+                  2. ee.Initialize(project='{geeProject}')
+                - OAuth credentials are cached on the system (~/.config/earthengine/)
+                - If ee.Initialize() fails with auth errors, tell the user to run ee.Authenticate()
+                  in ArcGIS Pro's Python window first (opens browser for Google sign-in, one-time only)
+
+                GEE download constraints:
+                - ee.Image.getDownloadURL() has a 50 MB per-request limit
+                - Server-side operations (mosaic, clip, compositing) have no size limit
+                - For large areas, estimate size first and split downloads if needed
+                - Use the current map extent or study area from context as default region
+                """);
+        }
+        return sb.ToString();
+    }
+
+    private static string SystemPrompt => BuildSystemPrompt();
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -53,7 +89,94 @@ public class LlmService
 
     private readonly List<object> _conversationHistory = [];
 
-    public void ClearHistory() => _conversationHistory.Clear();
+    /// <summary>Max messages to keep in conversation history before truncating old ones.</summary>
+    private const int MaxHistoryLength = 40;
+
+    private static readonly string ConversationLogDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "GISChat", "logs");
+
+    public void ClearHistory()
+    {
+        DumpHistoryToDebugLog("clear");
+        _conversationHistory.Clear();
+    }
+
+    /// <summary>
+    /// Remove the last N entries from conversation history (used for error rollback).
+    /// </summary>
+    public void RollbackHistory(int count = 1)
+    {
+        for (int i = 0; i < count && _conversationHistory.Count > 0; i++)
+            _conversationHistory.RemoveAt(_conversationHistory.Count - 1);
+    }
+
+    /// <summary>
+    /// Trim conversation history to MaxHistoryLength, saving truncated messages to debug log.
+    /// Ensures the first remaining message has role "user" (not a tool_result).
+    /// </summary>
+    private void TrimHistory()
+    {
+        if (_conversationHistory.Count <= MaxHistoryLength)
+            return;
+
+        var removeCount = _conversationHistory.Count - MaxHistoryLength;
+
+        // Advance past any tool_use/tool_result pairs at the cut boundary
+        // to avoid splitting them across the trim point
+        while (removeCount < _conversationHistory.Count)
+        {
+            var entry = JsonSerializer.Serialize(_conversationHistory[removeCount]);
+            // If this entry looks like a tool_result (Anthropic) or tool role (OpenAI), include it in the removal
+            if (entry.Contains("\"tool_result\"") || entry.Contains("\"role\":\"tool\""))
+            {
+                removeCount++;
+                continue;
+            }
+            // If it's an assistant message with tool_use, also remove it (its tool_result follows)
+            if (entry.Contains("\"tool_use\"") && entry.Contains("\"role\":\"assistant\""))
+            {
+                removeCount++;
+                continue;
+            }
+            break;
+        }
+
+        if (removeCount <= 0 || removeCount >= _conversationHistory.Count)
+            return;
+
+        // Save truncated entries to debug log
+        var truncated = _conversationHistory.Take(removeCount).ToList();
+        DumpHistoryToDebugLog("trim", truncated);
+
+        _conversationHistory.RemoveRange(0, removeCount);
+        Logger.Info($"Conversation history trimmed: removed {removeCount} old messages, {_conversationHistory.Count} remaining.");
+    }
+
+    /// <summary>
+    /// Write conversation history to a JSONL debug file for post-mortem analysis.
+    /// </summary>
+    private void DumpHistoryToDebugLog(string reason, List<object>? entries = null)
+    {
+        try
+        {
+            Directory.CreateDirectory(ConversationLogDir);
+            var logFile = Path.Combine(ConversationLogDir, $"conversation_{DateTime.Now:yyyy-MM-dd}.jsonl");
+            var items = entries ?? _conversationHistory.ToList();
+            if (items.Count == 0) return;
+
+            var record = new
+            {
+                timestamp = DateTime.Now.ToString("o"),
+                reason,
+                messageCount = items.Count,
+                messages = items
+            };
+            var json = JsonSerializer.Serialize(record, new JsonSerializerOptions { WriteIndented = false });
+            File.AppendAllText(logFile, json + Environment.NewLine);
+        }
+        catch { } // never crash on debug logging
+    }
 
     public async Task<LlmResponse> SendAsync(string userMessage, string mapContext)
     {
@@ -83,11 +206,23 @@ public class LlmService
         };
     }
 
+    public async Task<LlmResponse> SendToolResultsAsync(List<(string id, string result)> toolResults, string mapContext)
+    {
+        var settings = AddinSettings.Instance;
+        return settings.Provider switch
+        {
+            LlmProviderType.Anthropic => await SendAnthropicToolResultsAsync(toolResults, mapContext, settings),
+            // For non-Anthropic providers, send results sequentially (they don't batch)
+            _ => await SendToolResultAsync(toolResults.Last().id, toolResults.Last().result, mapContext)
+        };
+    }
+
     // ---- Anthropic (Claude) ----
 
     private async Task<LlmResponse> SendAnthropicAsync(string userMessage, string mapContext, AddinSettings settings)
     {
         _conversationHistory.Add(new { role = "user", content = userMessage });
+        TrimHistory();
 
         var body = new
         {
@@ -120,11 +255,15 @@ public class LlmService
     }
 
     private async Task<LlmResponse> SendAnthropicToolResultAsync(string toolCallId, string result, string mapContext, AddinSettings settings)
+        => await SendAnthropicToolResultsAsync([(toolCallId, result)], mapContext, settings);
+
+    private async Task<LlmResponse> SendAnthropicToolResultsAsync(List<(string id, string result)> toolResults, string mapContext, AddinSettings settings)
     {
+        var resultBlocks = toolResults.Select(tr => (object)new { type = "tool_result", tool_use_id = tr.id, content = tr.result }).ToArray();
         _conversationHistory.Add(new
         {
             role = "user",
-            content = new[] { new { type = "tool_result", tool_use_id = toolCallId, content = result } }
+            content = resultBlocks
         });
 
         var body = new
@@ -163,12 +302,12 @@ public class LlmService
                 resp.Text += block.GetProperty("text").GetString();
             else if (type == "tool_use")
             {
-                resp.ToolCall = new ToolCallInfo
+                resp.ToolCalls.Add(new ToolCallInfo
                 {
                     Id = block.GetProperty("id").GetString() ?? "",
                     Name = block.GetProperty("name").GetString() ?? "",
                     Arguments = block.GetProperty("input")
-                };
+                });
             }
         }
         return resp;
@@ -196,6 +335,7 @@ public class LlmService
     private async Task<LlmResponse> SendOpenAICompatibleAsync(string userMessage, string mapContext, AddinSettings settings)
     {
         _conversationHistory.Add(new { role = "user", content = userMessage });
+        TrimHistory();
 
         var messages = new List<object>
         {
@@ -276,12 +416,12 @@ public class LlmService
         {
             var tc = toolCalls[0];
             var fn = tc.GetProperty("function");
-            resp.ToolCall = new ToolCallInfo
+            resp.ToolCalls.Add(new ToolCallInfo
             {
                 Id = tc.GetProperty("id").GetString() ?? "",
                 Name = fn.GetProperty("name").GetString() ?? "",
                 Arguments = JsonDocument.Parse(fn.GetProperty("arguments").GetString() ?? "{}").RootElement
-            };
+            });
         }
 
         return resp;
@@ -312,6 +452,7 @@ public class LlmService
     private async Task<LlmResponse> SendGeminiAsync(string userMessage, string mapContext, AddinSettings settings)
     {
         _conversationHistory.Add(new { role = "user", parts = new[] { new { text = userMessage } } });
+        TrimHistory();
 
         var url = $"{settings.EffectiveEndpoint}/models/{settings.Model}:generateContent?key={settings.ApiKey}";
 
@@ -421,12 +562,12 @@ public class LlmService
                 resp.Text += text.GetString();
             if (part.TryGetProperty("functionCall", out var fc))
             {
-                resp.ToolCall = new ToolCallInfo
+                resp.ToolCalls.Add(new ToolCallInfo
                 {
                     Id = "gemini_" + Guid.NewGuid().ToString("N")[..8],
                     Name = fc.GetProperty("name").GetString() ?? "",
                     Arguments = fc.GetProperty("args")
-                };
+                });
             }
         }
         return resp;
@@ -439,8 +580,9 @@ public class LlmService
 public class LlmResponse
 {
     public string Text { get; set; } = "";
-    public ToolCallInfo? ToolCall { get; set; }
-    public bool HasToolCall => ToolCall != null;
+    public List<ToolCallInfo> ToolCalls { get; set; } = [];
+    public ToolCallInfo? ToolCall => ToolCalls.Count > 0 ? ToolCalls[0] : null;
+    public bool HasToolCall => ToolCalls.Count > 0;
 }
 
 public class ToolCallInfo

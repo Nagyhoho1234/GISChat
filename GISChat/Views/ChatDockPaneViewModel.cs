@@ -127,11 +127,13 @@ internal class ChatDockPaneViewModel : DockPane
             Logger.Error("SendMessage failed", ex);
             Messages.Add(new ChatMessage(MessageRole.System, $"Error: {ex.Message}"));
 
-            // If conversation history is corrupted (missing tool_result etc.), reset it
+            // If conversation history is corrupted (missing tool_result etc.),
+            // roll back the last user message that caused the desync, then clear as last resort
             if (ex.Message.Contains("tool_result") || ex.Message.Contains("tool_use"))
             {
-                _llm.ClearHistory();
-                Messages.Add(new ChatMessage(MessageRole.System, "Conversation history reset due to sync error. You can continue chatting."));
+                _llm.RollbackHistory(1); // remove the user message that triggered the error
+                Logger.Info("Rolled back last history entry due to tool_result desync.");
+                Messages.Add(new ChatMessage(MessageRole.System, "History sync error — last message rolled back. Please try again."));
             }
 
             // Re-check connection on failure
@@ -143,16 +145,46 @@ internal class ChatDockPaneViewModel : DockPane
         }
     }
 
-    private async Task ProcessResponseAsync(LlmResponse response, string mapContext)
+    private const int MaxToolRoundTrips = 10; // safety limit against infinite loops
+
+    private async Task ProcessResponseAsync(LlmResponse response, string mapContext, int depth = 0)
     {
-        if (response.HasToolCall && response.ToolCall!.Name == "run_arcpy")
+        // Show any text that came with the response
+        if (!string.IsNullOrWhiteSpace(response.Text) && !response.HasToolCall)
         {
-            var tc = response.ToolCall;
+            Messages.Add(new ChatMessage(MessageRole.Assistant, response.Text));
+            return;
+        }
+
+        if (!response.HasToolCall)
+            return;
+
+        if (depth >= MaxToolRoundTrips)
+        {
+            Messages.Add(new ChatMessage(MessageRole.System, "Stopped: too many consecutive tool calls."));
+            return;
+        }
+
+        // Execute ALL tool calls from this response and collect results
+        var toolResults = new List<(string id, string result)>();
+
+        foreach (var tc in response.ToolCalls)
+        {
+            if (tc.Name != "run_arcpy")
+            {
+                toolResults.Add((tc.Id, $"Unknown tool: {tc.Name}"));
+                continue;
+            }
+
             var code = tc.GetArg("code");
             var explanation = tc.GetArg("explanation");
 
+            // Show text before first tool call if present
+            if (toolResults.Count == 0 && !string.IsNullOrWhiteSpace(response.Text))
+                Messages.Add(new ChatMessage(MessageRole.Assistant, response.Text));
+
             var msg = new ChatMessage(MessageRole.Assistant,
-                string.IsNullOrWhiteSpace(explanation) ? response.Text : explanation)
+                string.IsNullOrWhiteSpace(explanation) ? "Executing code..." : explanation)
             {
                 CodeBlock = AddinSettings.Instance.ShowGeneratedCode ? code : null,
                 IsExecuting = true
@@ -176,18 +208,16 @@ internal class ChatDockPaneViewModel : DockPane
                 msg.IsExecuting = false;
             }
 
-            // Always send tool_result back — Anthropic requires it after every tool_use
-            var followUp = await _llm.SendToolResultAsync(tc.Id, toolResultText, mapContext);
-            if (!string.IsNullOrWhiteSpace(followUp.Text))
-                Messages.Add(new ChatMessage(MessageRole.Assistant, followUp.Text));
-
-            RefreshMessages();
-            return;
+            toolResults.Add((tc.Id, toolResultText));
         }
 
-        // Plain text response
-        if (!string.IsNullOrWhiteSpace(response.Text))
-            Messages.Add(new ChatMessage(MessageRole.Assistant, response.Text));
+        RefreshMessages();
+
+        // Send ALL tool results back in one message (Anthropic requires this)
+        var followUp = await _llm.SendToolResultsAsync(toolResults, mapContext);
+
+        // Recursively process the follow-up (it may contain more tool calls)
+        await ProcessResponseAsync(followUp, mapContext, depth + 1);
     }
 
     private Task<bool> ConfirmExecutionAsync(string explanation)

@@ -1,5 +1,6 @@
 using System.Text;
 using ArcGIS.Core.CIM;
+using ArcGIS.Core.Data.Raster;
 using ArcGIS.Desktop.Framework.Threading.Tasks;
 using ArcGIS.Desktop.Mapping;
 
@@ -74,6 +75,33 @@ public static class MapContextService
                         var selection = featureLayer.GetSelection();
                         if (selection.GetCount() > 0)
                             sb.AppendLine($"    Selected: {selection.GetCount()} features");
+                    }
+                    catch { }
+                }
+
+                // For raster layers, add band/resolution/stats info
+                if (layer is RasterLayer rasterLayer)
+                {
+                    try
+                    {
+                        var raster = rasterLayer.GetRaster();
+                        var bandCount = raster.GetBandCount();
+                        var cellSize = raster.GetMeanCellSize();
+                        sb.AppendLine($"    Cell size: {cellSize.Item1:F2} x {cellSize.Item2:F2}");
+                        sb.AppendLine($"    Bands: {bandCount}");
+
+                        for (int b = 0; b < Math.Min(bandCount, 20); b++)
+                        {
+                            try
+                            {
+                                var band = raster.GetBand(b);
+                                var def = band.GetDefinition();
+                                var name = def.GetName();
+                                var pixelType = def.GetPixelType();
+                                sb.AppendLine($"      [{b}] {name} ({pixelType})");
+                            }
+                            catch { }
+                        }
                     }
                     catch { }
                 }

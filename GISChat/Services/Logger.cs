@@ -78,7 +78,7 @@ public static class Logger
         var body = $"""
             ## Error Report
 
-            **GIS Chat Version:** 1.0.0
+            **GIS Chat Version:** 1.1.0
             **ArcGIS Pro:** {GetArcGISProVersion()}
             **Provider:** {Models.AddinSettings.Instance.Provider}
             **Model:** {Models.AddinSettings.Instance.Model}

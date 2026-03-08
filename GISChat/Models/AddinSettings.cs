@@ -22,6 +22,12 @@ public class AddinSettings
     public bool ShowGeneratedCode { get; set; } = true;
 
     /// <summary>
+    /// Google Earth Engine project ID for ee.Initialize(project=...).
+    /// Leave blank to disable GEE integration hints.
+    /// </summary>
+    public string GeeProject { get; set; } = "";
+
+    /// <summary>
     /// Returns the effective endpoint URL, falling back to the provider default.
     /// </summary>
     [JsonIgnore]

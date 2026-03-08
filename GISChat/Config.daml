@@ -5,7 +5,7 @@
         xsi:schemaLocation="http://schemas.esri.com/DADF/Registry file:///C:/Program%20Files/ArcGIS/Pro/bin/ArcGIS.Desktop.Framework.xsd">
 
   <AddInInfo id="{B7E8F9A0-1234-5678-9ABC-DEF012345678}"
-             version="1.0"
+             version="1.1"
              desktopVersion="3.6">
     <Name>GIS Chat</Name>
     <Description>AI-powered chat assistant for ArcGIS Pro that can execute GIS tasks via natural language.</Description>

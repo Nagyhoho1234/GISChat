@@ -37,6 +37,7 @@ public partial class SettingsWindow : Window
 
         ApiKeyBox.Password = s.ApiKey;
         EndpointBox.Text = s.Endpoint;
+        GeeProjectBox.Text = s.GeeProject;
         ConfirmCheck.IsChecked = s.ConfirmBeforeExecute;
         ShowCodeCheck.IsChecked = s.ShowGeneratedCode;
 
@@ -170,21 +171,123 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private void Save_Click(object sender, RoutedEventArgs e)
+    private async void Save_Click(object sender, RoutedEventArgs e)
     {
         var s = AddinSettings.Instance;
+        var oldGeeProject = s.GeeProject;
+
         s.Provider = SelectedProvider;
         s.ApiKey = ApiKeyBox.Password;
         s.Model = ModelCombo.Text;
         s.Endpoint = EndpointBox.Text.Trim();
+        s.GeeProject = GeeProjectBox.Text.Trim();
         s.ConfirmBeforeExecute = ConfirmCheck.IsChecked == true;
         s.ShowGeneratedCode = ShowCodeCheck.IsChecked == true;
         s.Save();
 
         Logger.Info($"Settings saved: Provider={s.Provider}, Model={s.Model}");
 
+        // If GEE project was just configured, run setup check
+        if (!string.IsNullOrWhiteSpace(s.GeeProject) && s.GeeProject != oldGeeProject)
+        {
+            await CheckGeeSetupAsync(s.GeeProject);
+        }
+
         DialogResult = true;
         Close();
+    }
+
+    private async Task CheckGeeSetupAsync(string geeProject)
+    {
+        // Step 1: Check if earthengine-api is installed
+        var checkResult = await PythonExecutor.RunArcPyAsync(
+            "try:\n    import ee\n    print('INSTALLED')\nexcept ImportError:\n    print('NOT_INSTALLED')");
+
+        if (checkResult.Output.Contains("NOT_INSTALLED"))
+        {
+            var install = MessageBox.Show(
+                "Google Earth Engine (earthengine-api) is not installed.\n\n" +
+                "Install it now? This may take a minute.",
+                "GIS Chat — GEE Setup",
+                MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+            if (install != MessageBoxResult.Yes)
+                return;
+
+            // Use pip in-process (no subprocess!) — sys.executable = ArcGISPro.exe in embedded Python
+            var installResult = await PythonExecutor.RunArcPyAsync(
+                "from pip._internal.cli.main import main as _pip_main\n" +
+                "print('Installing earthengine-api...')\n" +
+                "_rc = _pip_main(['install', 'earthengine-api', '--quiet'])\n" +
+                "if _rc == 0:\n" +
+                "    print('INSTALL_OK')\n" +
+                "else:\n" +
+                "    print(f'INSTALL_FAILED (exit code {_rc})')");
+
+            if (installResult.Output.Contains("INSTALL_FAILED") || !installResult.Success)
+            {
+                MessageBox.Show(
+                    "Failed to install earthengine-api.\n\n" +
+                    "Try manually in ArcGIS Pro's Python Command Prompt:\n" +
+                    "  pip install earthengine-api\n\n" +
+                    (installResult.Error ?? installResult.Output),
+                    "GIS Chat — GEE Setup", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            MessageBox.Show("earthengine-api installed successfully!",
+                "GIS Chat — GEE Setup", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        // Step 2: Check if credentials are valid
+        var authResult = await PythonExecutor.RunArcPyAsync(
+            "import ee\n" +
+            "try:\n" +
+            $"    ee.Initialize(project='{geeProject}')\n" +
+            "    print('AUTH_OK')\n" +
+            "except Exception as ex:\n" +
+            "    print(f'AUTH_FAILED: {ex}')");
+
+        if (authResult.Output.Contains("AUTH_OK"))
+        {
+            MessageBox.Show(
+                $"GEE is ready! Connected to project '{geeProject}'.",
+                "GIS Chat — GEE Setup", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        else
+        {
+            // ee.Authenticate() opens a browser — safe to run in-process, no subprocess needed
+            var auth = MessageBox.Show(
+                "GEE credentials not found or expired.\n\n" +
+                "Run authentication now? This will open a browser\n" +
+                "for Google sign-in (one-time only).",
+                "GIS Chat — GEE Setup",
+                MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+            if (auth == MessageBoxResult.Yes)
+            {
+                var authRunResult = await PythonExecutor.RunArcPyAsync(
+                    "import ee\n" +
+                    "ee.Authenticate()\n" +
+                    $"ee.Initialize(project='{geeProject}')\n" +
+                    "print('AUTH_OK')");
+
+                if (authRunResult.Output.Contains("AUTH_OK"))
+                {
+                    MessageBox.Show(
+                        $"GEE authenticated and connected to '{geeProject}'!",
+                        "GIS Chat — GEE Setup", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    MessageBox.Show(
+                        "Complete the sign-in in your browser, then GEE should work.\n\n" +
+                        "If it still fails, run in ArcGIS Pro's Python window:\n" +
+                        "  import ee; ee.Authenticate()",
+                        "GIS Chat — GEE Setup", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+            }
+        }
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e)
