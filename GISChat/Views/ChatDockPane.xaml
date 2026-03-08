@@ -52,9 +52,13 @@
                         <!-- Execution result: error (red) -->
                         <Border Background="#FFEBEE" CornerRadius="4" Padding="8" Margin="0,6,0,0"
                                 Visibility="{Binding IsResultError, Converter={StaticResource BoolToVisConverter}}">
-                            <TextBox Text="{Binding ExecutionResult, Mode=OneWay}" TextWrapping="Wrap"
-                                     Foreground="#C62828" FontFamily="Consolas" FontSize="11"
-                                     IsReadOnly="True" Background="Transparent" BorderThickness="0" Padding="0"/>
+                            <StackPanel>
+                                <TextBox Text="{Binding ExecutionResult, Mode=OneWay}" TextWrapping="Wrap"
+                                         Foreground="#C62828" FontFamily="Consolas" FontSize="11"
+                                         IsReadOnly="True" Background="Transparent" BorderThickness="0" Padding="0"/>
+                                <TextBlock Text="Analyzing error and working on a fix..." Margin="0,4,0,0"
+                                           Foreground="#F57C00" FontStyle="Italic" FontSize="11"/>
+                            </StackPanel>
                         </Border>
                     </StackPanel>
                 </Border>
